@@ -41,6 +41,7 @@ from handlers.voice_provider_adapters import ProviderAdapterError, build_voice_p
 from handlers.voice_worker_metadata import is_voice_session_metadata, parse_voice_session_metadata
 from utils.logger import logger
 from utils.logger import redact_sensitive
+from utils.langfuse_client import create_trace, flush_langfuse
 import asyncio
 import json
 from datetime import datetime, timezone
@@ -477,6 +478,18 @@ async def entrypoint(ctx: JobContext):
         metadata = await apply_initiation_webhook_metadata(config, metadata, call_context)
         config = apply_metadata_overrides(config, metadata)
         config = attach_resolved_voice_config(config)
+        
+    config["call_id"] = call_context.get("call_id")
+    
+    call_id = call_context.get("call_id")
+    if call_id:
+        create_trace(
+            call_id=call_id,
+            user_id=config.get("user_id"),
+            session_id=call_id,
+            metadata={"direction": call_context.get("direction"), "agent_id": call_context.get("agent_id")}
+        )
+        
     logger.info("Config loaded for agent: {}", redact_sensitive(config.get("agent_id")))
 
     try:
@@ -612,6 +625,8 @@ async def entrypoint(ctx: JobContext):
             await call_finalizer.finalize()
         except Exception as error:
             logger.error("[CALL_LOG] Failed to finalize completed call: {}", redact_sensitive(str(error)))
+            
+        flush_langfuse()
 
     if hasattr(ctx, "add_shutdown_callback"):
         ctx.add_shutdown_callback(unified_shutdown_hook)

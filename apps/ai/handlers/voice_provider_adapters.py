@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from livekit.plugins import aws, deepgram, elevenlabs, sarvam
+from livekit.agents.llm import LLM, LLMStream, ChatContext
+from utils.langfuse_client import get_langfuse
+import time
 
 
 class ProviderAdapterError(RuntimeError):
@@ -19,7 +22,11 @@ class VoiceProviderAdapters:
 
 def build_voice_provider_adapters(config: dict[str, Any]) -> VoiceProviderAdapters:
     stt = _build_stt(config["stt"], config["language"])
-    llm = _build_llm(config["llm"])
+    
+    call_id = config.get("call_id") # Note: we must ensure call_id is passed in the config
+    raw_llm = _build_llm(config["llm"])
+    llm = wrap_langfuse_llm(raw_llm, call_id, config["llm"]["model"])
+    
     tts = _build_tts(config["tts"], config["language"])
     return VoiceProviderAdapters(
         stt=stt,
@@ -130,3 +137,71 @@ def _sarvam_language(language: str) -> str:
         "en-IN": "en-IN",
         "hi": "hi-IN",
     }.get(language, language)
+
+
+class LangfuseLLMStreamProxy(LLMStream):
+    def __init__(self, inner_stream: LLMStream, generation: Any):
+        super().__init__(
+            llm=inner_stream.llm,
+            chat_ctx=inner_stream.chat_ctx,
+            fnc_ctx=inner_stream.fnc_ctx
+        )
+        self._inner = inner_stream
+        self._generation = generation
+        self._text_content = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+        
+    def __aiter__(self):
+        return self
+        
+    async def __anext__(self):
+        try:
+            chunk = await self._inner.__anext__()
+            if hasattr(chunk, "choices") and chunk.choices:
+                for choice in chunk.choices:
+                    if hasattr(choice, "delta") and hasattr(choice.delta, "content") and choice.delta.content:
+                        self._text_content.append(choice.delta.content)
+            return chunk
+        except StopAsyncIteration:
+            if self._generation:
+                self._generation.end(output="".join(self._text_content))
+            raise
+        except Exception as e:
+            if self._generation:
+                self._generation.end(level="ERROR", status_message=str(e))
+            raise
+
+
+def wrap_langfuse_llm(llm_instance: LLM, call_id: str, model_name: str) -> LLM:
+    original_chat = llm_instance.chat
+    
+    def chat_wrapper(chat_ctx: ChatContext, *args, **kwargs) -> LLMStream:
+        client = get_langfuse()
+        generation = None
+        if client and call_id:
+            try:
+                messages = []
+                for msg in chat_ctx.messages:
+                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                    messages.append({"role": msg.role, "content": content})
+                    
+                generation = client.generation(
+                    trace_id=call_id,
+                    name="agent_llm_turn",
+                    model=model_name,
+                    input=messages,
+                )
+            except Exception as e:
+                from utils.logger import logger
+                logger.warning(f"[langfuse] Failed to start generation: {e}")
+                
+        stream = original_chat(chat_ctx, *args, **kwargs)
+        if not generation:
+            return stream
+            
+        return LangfuseLLMStreamProxy(stream, generation)
+        
+    llm_instance.chat = chat_wrapper
+    return llm_instance

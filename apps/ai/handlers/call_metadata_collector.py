@@ -1,4 +1,5 @@
 from typing import Any
+from utils.langfuse_client import score_evaluation
 
 
 def build_metadata_collection_instructions(config: dict[str, Any]) -> str:
@@ -59,6 +60,16 @@ class CallMetadataCollector:
             "value": _normalize_value(value),
         }
         _upsert(self._config["data_evaluated"], item, key="identifier")
+        
+        call_id = self._config.get("call_id")
+        if call_id:
+            score_evaluation(
+                call_id=call_id,
+                name=item["identifier"],
+                value=item["value"],
+                comment=item["description"]
+            )
+            
         return f"Recorded evaluation {item['identifier']}."
 
 
