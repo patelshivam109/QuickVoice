@@ -149,6 +149,7 @@ class LangfuseLLMStreamProxy(LLMStream):
         self._inner = inner_stream
         self._generation = generation
         self._text_content = []
+        self._start_time = time.time()
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -166,10 +167,14 @@ class LangfuseLLMStreamProxy(LLMStream):
             return chunk
         except StopAsyncIteration:
             if self._generation:
+                elapsed = time.time() - self._start_time
+                self._generation.update(metadata={"total_latency_seconds": elapsed})
                 self._generation.end(output="".join(self._text_content))
             raise
         except Exception as e:
             if self._generation:
+                elapsed = time.time() - self._start_time
+                self._generation.update(metadata={"total_latency_seconds": elapsed})
                 self._generation.end(level="ERROR", status_message=str(e))
             raise
 
@@ -187,8 +192,8 @@ def wrap_langfuse_llm(llm_instance: LLM, call_id: str, model_name: str) -> LLM:
                     content = msg.content if isinstance(msg.content, str) else str(msg.content)
                     messages.append({"role": msg.role, "content": content})
                     
-                generation = client.generation(
-                    trace_id=call_id,
+                trace = client.trace(id=call_id)
+                generation = trace.generation(
                     name="agent_llm_turn",
                     model=model_name,
                     input=messages,

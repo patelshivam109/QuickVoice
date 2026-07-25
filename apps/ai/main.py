@@ -189,6 +189,7 @@ def attach_resolved_voice_config(config: dict) -> dict:
 def build_session_provider_kwargs(config: dict) -> dict:
     voice_config = config.get("voice_config")
     if isinstance(voice_config, dict):
+        voice_config["call_id"] = config.get("call_id")
         adapters = build_voice_provider_adapters(voice_config)
         logger.info("Voice provider adapters: {}", redact_sensitive(adapters.summary))
         return {"stt": adapters.stt, "llm": adapters.llm, "tts": adapters.tts}
