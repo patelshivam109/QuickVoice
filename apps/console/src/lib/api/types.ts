@@ -188,8 +188,14 @@ export interface AgentWidget {
 export interface WebhookConfig {
   webhook_url: string;
   method?: "GET" | "POST";
-  headers?: Record<string, string>;
-  body?: Record<string, unknown>;
+  headers?: Record<
+    string,
+    { value: string | null; type: "Value" | "Secret"; redacted?: boolean }
+  >;
+  body?: Record<
+    string,
+    { value: string | null; type: "Value" | "Secret"; redacted?: boolean }
+  >;
   dynamic_variables?: Record<string, string>;
   transcript?: boolean;
   audio_url?: boolean;
@@ -257,6 +263,9 @@ export interface KnowledgeSource {
   storagePath: string;
   sourceType: KbSourceType;
   status: KbStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorRetryable: boolean | null;
   metadata: Record<string, unknown> | null;
   lastIndexedAt: string | null;
   uploadedAt: string;
